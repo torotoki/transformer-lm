@@ -17,10 +17,11 @@ class TransformerConfig(PretrainedConfig):
             context_size = 512,
             **kwargs,
     ):
-        super().__init__(self, **kwargs)
+        super().__init__(**kwargs)
         self.num_hidden_layers = num_hidden_layers
         self.d_model = d_model
         self.vocab_size = vocab_size
+        self.context_size = context_size
 
 @dataclass
 class TransformerOutput(ModelOutput):
@@ -37,7 +38,7 @@ class AttentionBlock(GradientCheckpointingLayer):
 
     def forward(self, x: torch.Tensor, attention_mask: torch.Tensor | None) -> torch.Tensor:
         B, T, D = x.shape
-        assert((T, T) == attention_mask.shape)
+        assert((B, T) == attention_mask.shape)
         # 1. Apply the attention mask to x
         # 2. Compute Q, K, V from the linear projection
         # 3. Compute the self attention over Q, K, V
@@ -47,7 +48,7 @@ class AttentionBlock(GradientCheckpointingLayer):
 
         hidden_states = Q @ K.transpose(1, 2)  # (B, T, T)
         if attention_mask is not None:
-            hidden_states = hidden_states * attention_mask[None, :, :]
+            hidden_states = hidden_states * attention_mask[:, :, None]
         
         hidden_states = F.softmax(hidden_states / sqrt(D), dim=-1)  # (B, T, T)
         hidden_states = hidden_states @ V  # (B, T, D)
@@ -64,7 +65,7 @@ class MLPBlock(GradientCheckpointingLayer):
         self.out_proj = nn.Linear(config.d_model * 4, config.d_model)
         self.dropout = nn.Dropout()
     
-    def forward(x: torch.Tensor):
+    def forward(self, x: torch.Tensor):
         # x: (B, T, D)
         x = self.in_proj(x)
         x = self.gate(x)
@@ -78,17 +79,19 @@ class TransformerBlock(GradientCheckpointingLayer):
         super().__init__()
         self.config = config
         self.layer_idx = layer_idx
-        self.transformer_block = TransformerBlock(config, layer_idx)
-        self.norm_fn = nn.RMSNorm((config.context_size, config.d_model))
-        self.mlp_block = MLPBlock(config, layer_idx)
+        self.norm_fn1 = nn.RMSNorm((config.d_model))
+        self.attention_block = AttentionBlock(config, layer_idx)  # d_model -> d_model
+        self.norm_fn2 = nn.RMSNorm((config.d_model))
+        self.mlp_block = MLPBlock(config, layer_idx)  # d_model -> d_model
     
-    def forward(self, x: torch.Tensor, attention_mask: torch.Tensort | None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, attention_mask: torch.Tensor | None) -> torch.Tensor:
         # x: (B, T, D)
-        # hidden_states: (B, T, D)
-        hidden_states = self.attention_block(x, attention_mask)
-        hidden_states = self.norm_fn(hidden_states)
-        hidden_states = self.mlp_block(hidden_states)
-        return hidden_states
+        # Normalize the hidden states before applying attention and MLP layers
+        x = self.norm_fn1(x)
+        x = self.attention_block(x, attention_mask)
+        x = self.norm_fn2(x)
+        x = self.mlp_block(x)
+        return x
 
 class Transformer(PreTrainedModel):
     config_class = TransformerConfig
@@ -96,7 +99,7 @@ class Transformer(PreTrainedModel):
     _tied_weights_keys = ["lm_head.weight"]
 
     def __init__(self, config: TransformerConfig):
-        super().__init__()
+        super().__init__(config)
         self.emb = nn.Embedding(config.vocab_size, config.d_model)
         self.layers = nn.ModuleList(
             [TransformerBlock(config, layer_idx=idx) for idx in range(config.num_hidden_layers)]
@@ -107,14 +110,32 @@ class Transformer(PreTrainedModel):
         self.loss_fn = nn.CrossEntropyLoss()
         self.post_init()  # Init weight (HF recommended)
 
-    def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor | None) -> TransformerOutput:
+    def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor | None, labels: torch.Tensor = None) -> TransformerOutput:
         x = self.emb(input_ids)
         for layer in self.layers:
-            x = layer(x)
+            x = layer(x, attention_mask)
         x = self.norm(x)
         logits = self.lm_head(x)
+
+        if labels is None:
+            labels = input_ids
+        
+        # Remove the last token
+        shift_logits = logits[..., :-1, :].contiguous()
+        # Remove the first token
+        shift_labels = labels[..., 1:].contiguous()
+
+        if attention_mask is not None:
+            shift_attention_mask = attention_mask[..., 1:].contiguous()
+            shift_labels = shift_labels.masked_fill(shift_attention_mask == 0, -100)
+        
+        loss = self.loss_fn(
+            shift_logits.view(-1, shift_logits.size(-1)),  # (B * T, vocab_size)
+            shift_labels.view(-1)  # (B * T,)
+        )
+
         return TransformerOutput(
-            loss = x,
+            loss = loss,
             logits = logits,
         )
 
