@@ -1,4 +1,4 @@
-from transformers import AutoTokenizer, DataCollatorWithPadding, TrainingArguments, Trainer
+from transformers import AutoTokenizer, DataCollatorWithPadding, GenerationConfig, TrainingArguments, Trainer, pipeline
 from datasets import Dataset
 from model import TransformerConfig, Transformer
 
@@ -27,7 +27,7 @@ args = TrainingArguments(
     output_dir="out-custom",
     per_device_train_batch_size=2,
     per_device_eval_batch_size=2,
-    num_train_epochs=1000,
+    num_train_epochs=100,
     eval_strategy="epoch",
     save_strategy="no",  #TODO: epoch
     logging_steps=1,
@@ -40,9 +40,27 @@ trainer = Trainer(
     args=args,
     train_dataset=ds.select(range(4)),
     eval_dataset=ds.select(range(4, len(ds))),
-    tokenizer=tok,
+    processing_class=tok,
     data_collator=collator,
 )
 
 trainer.train()
-model.save_pretrained("out-custom") 
+
+folder ="out-custom-simple"
+# Add `generation_config.json``
+gen_config = GenerationConfig(
+    max_new_tokens=128,
+    do_sample=True,
+    temperature=0.7,
+    top_p=0.95,
+    repetition_penalty=1.1,
+    eos_token_id=tok.eos_token_id,
+    pad_token_id=tok.eos_token_id,
+    use_cache=False,  # KV-cache is not supported yet
+)
+# Add model code in the saved directory
+config.register_for_auto_class()
+model.register_for_auto_class("AutoModelForCausalLM")
+model.save_pretrained(folder) 
+config.save_pretrained(folder)
+gen_config.save_pretrained(folder)

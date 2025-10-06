@@ -3,7 +3,7 @@ from dataclasses import dataclass
 import torch
 from torch import nn
 from torch.nn import functional as F
-from transformers import PreTrainedModel, PretrainedConfig
+from transformers import GenerationMixin, PreTrainedModel, PretrainedConfig
 from transformers.modeling_layers import GradientCheckpointingLayer
 from transformers.utils import ModelOutput
 
@@ -22,6 +22,8 @@ class TransformerConfig(PretrainedConfig):
         self.d_model = d_model
         self.vocab_size = vocab_size
         self.context_size = context_size
+        # HF: Calling tie_weights() after post_init()
+        self.tie_word_embeddings = True
 
 @dataclass
 class TransformerOutput(ModelOutput):
@@ -86,14 +88,16 @@ class TransformerBlock(GradientCheckpointingLayer):
     
     def forward(self, x: torch.Tensor, attention_mask: torch.Tensor | None) -> torch.Tensor:
         # x: (B, T, D)
-        # Normalize the hidden states before applying attention and MLP layers
+        # 1. Applying attention and MLP layers
+        # 2. Normalize the hidden states
+        # 3. Residuation
         x = self.norm_fn1(x)
-        x = self.attention_block(x, attention_mask)
+        x = x + self.attention_block(x, attention_mask)
         x = self.norm_fn2(x)
-        x = self.mlp_block(x)
+        x = x + self.mlp_block(x)
         return x
 
-class Transformer(PreTrainedModel):
+class Transformer(PreTrainedModel, GenerationMixin):
     config_class = TransformerConfig
     # shared weight between LM head and embedding layers
     _tied_weights_keys = ["lm_head.weight"]
@@ -110,7 +114,13 @@ class Transformer(PreTrainedModel):
         self.loss_fn = nn.CrossEntropyLoss()
         self.post_init()  # Init weight (HF recommended)
 
-    def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor | None, labels: torch.Tensor = None) -> TransformerOutput:
+    def forward(
+            self,
+            input_ids: torch.Tensor,
+            attention_mask: torch.Tensor | None,
+            labels: torch.Tensor | None = None,
+            **kwargs,
+    ) -> TransformerOutput:
         x = self.emb(input_ids)
         for layer in self.layers:
             x = layer(x, attention_mask)
