@@ -47,6 +47,7 @@ trainer = Trainer(
 trainer.train()
 
 folder ="out-custom-simple"
+print("Save folder:", folder)
 # Add `generation_config.json``
 gen_config = GenerationConfig(
     max_new_tokens=128,

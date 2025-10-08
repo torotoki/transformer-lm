@@ -40,7 +40,7 @@ class AttentionBlock(GradientCheckpointingLayer):
 
     def forward(self, x: torch.Tensor, attention_mask: torch.Tensor | None) -> torch.Tensor:
         B, T, D = x.shape
-        assert((B, T) == attention_mask.shape)
+        assert(attention_mask is None or (B, T) == attention_mask.shape)
         # 1. Apply the attention mask to x
         # 2. Compute Q, K, V from the linear projection
         # 3. Compute the self attention over Q, K, V
@@ -117,7 +117,7 @@ class Transformer(PreTrainedModel, GenerationMixin):
     def forward(
             self,
             input_ids: torch.Tensor,
-            attention_mask: torch.Tensor | None,
+            attention_mask: torch.Tensor | None = None,
             labels: torch.Tensor | None = None,
             **kwargs,
     ) -> TransformerOutput:
@@ -137,7 +137,9 @@ class Transformer(PreTrainedModel, GenerationMixin):
 
         if attention_mask is not None:
             shift_attention_mask = attention_mask[..., 1:].contiguous()
-            shift_labels = shift_labels.masked_fill(shift_attention_mask == 0, -100)
+            shift_labels = shift_labels.masked_fill(
+                shift_attention_mask == 0, -100
+            )
         
         loss = self.loss_fn(
             shift_logits.view(-1, shift_logits.size(-1)),  # (B * T, vocab_size)
