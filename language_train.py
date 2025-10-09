@@ -1,34 +1,37 @@
 import secrets
 import string
 import multiprocessing as mp
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
+import wandb
 from accelerate import Accelerator
 from transformers import AutoTokenizer, DataCollatorWithPadding, GenerationConfig, TrainingArguments, Trainer, DataCollatorForLanguageModeling
 from datasets import Dataset, load_dataset
 from model import TransformerConfig, Transformer
+
 
 def main():
     tok = AutoTokenizer.from_pretrained("bert-base-uncased")
 
     num_proc = max(1, mp.cpu_count() - 1)
 
-    def random_tag(n=5, alphabet=string.ascii_lowercase + string.digits):
-        return ''.join(secrets.choice(alphabet) for _ in range(n))
-    
     accelerator = Accelerator()
-
-    if accelerator.is_main_process:
-        folder = f"outputs-dist/language-{random_tag()}"
-        print("Output folder:", folder)
 
     def encode(ex):
         out = tok(ex["text"], truncation=True, padding=False, max_length=64)
+        out["num_tokens"] = len(out["input_ids"])
         return out
 
     # We only use 10% of the validation dataset
     ds = load_dataset(
-        "roneneldan/TinyStories",
-        split={"train": "train[:100%]",
-            "validation": "validation[:10%]"}
+        # "roneneldan/TinyStories",
+        # split={"train": "train[:100%]",
+        #     "validation": "validation[:10%]"}
+        "HuggingFaceFW/fineweb-edu", "sample-10BT",
+        split={"train": "train[:1%]"},
     ).map(
         encode, batched=1000, num_proc=num_proc,
     )
@@ -42,7 +45,10 @@ def main():
     model = Transformer(config)
     if accelerator.is_main_process:
         print(config)
-        print("#parameters:", model.num_parameters())
+        print("#Model parameters:", model.num_parameters())
+        num_tokens = sum(ds["train"].get("num_tokens", -1))
+        print("#Total training tokens", num_tokens)
+        print("#Avg training tokens", num_tokens / len(ds["train"]))
 
     args = TrainingArguments(
         output_dir="out-custom",
@@ -50,7 +56,7 @@ def main():
         per_device_train_batch_size=8,
         per_device_eval_batch_size=8,
         num_train_epochs=1,
-        eval_strategy="steps",
+        eval_strategy="no",
         save_strategy="epoch",  #TODO: epoch
         logging_steps=50,
         eval_steps=2000,
@@ -62,7 +68,7 @@ def main():
         model=model,
         args=args,
         train_dataset=ds['train'],
-        eval_dataset=ds['validation'],
+        #eval_dataset=ds['validation'],
         processing_class=tok,
         data_collator=collator,
     )
@@ -81,6 +87,8 @@ def main():
         pad_token_id=tok.eos_token_id,
         use_cache=False,  # KV-cache is not supported yet
     )
+    folder = f"outputs/{wandb.run.name}-{wandb.run.id}"
+    print("Output folder:", folder)
     if accelerator.is_main_process:
         # Add model code in the saved directory
         config.register_for_auto_class()
