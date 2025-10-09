@@ -16,24 +16,24 @@ from model import TransformerConfig, Transformer
 def main():
     tok = AutoTokenizer.from_pretrained("bert-base-uncased")
 
-    num_proc = max(1, mp.cpu_count() - 1)
+    num_procs = max(1, mp.cpu_count() - 1)
 
     accelerator = Accelerator()
 
     def encode(ex):
-        out = tok(ex["text"], truncation=True, padding=False, max_length=64)
-        out["num_tokens"] = len(out["input_ids"])
+        out = tok(ex["text"], truncation=True, padding=False, max_length=512)
+        out["num_tokens"] = list(map(lambda ex: len(ex), out["input_ids"]))
         return out
 
     # We only use 10% of the validation dataset
     ds = load_dataset(
-        # "roneneldan/TinyStories",
+        #"roneneldan/TinyStories",
         # split={"train": "train[:100%]",
         #     "validation": "validation[:10%]"}
         "HuggingFaceFW/fineweb-edu", "sample-10BT",
-        split={"train": "train[:1%]"},
+        split={"train": "train[:10%]"},
     ).map(
-        encode, batched=1000, num_proc=num_proc,
+        encode, batched=1000, num_proc=num_procs,
     )
     collator = DataCollatorForLanguageModeling(tokenizer=tok, mlm=False)
 
@@ -46,7 +46,7 @@ def main():
     if accelerator.is_main_process:
         print(config)
         print("#Model parameters:", model.num_parameters())
-        num_tokens = sum(ds["train"].get("num_tokens", -1))
+        num_tokens = sum(ds["train"]["num_tokens"])
         print("#Total training tokens", num_tokens)
         print("#Avg training tokens", num_tokens / len(ds["train"]))
 
