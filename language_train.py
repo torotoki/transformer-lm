@@ -1,5 +1,4 @@
-import secrets
-import string
+import os
 import multiprocessing as mp
 try:
     from dotenv import load_dotenv
@@ -9,32 +8,20 @@ except Exception:
 import wandb
 from accelerate import Accelerator
 from transformers import AutoTokenizer, DataCollatorWithPadding, GenerationConfig, TrainingArguments, Trainer, DataCollatorForLanguageModeling
-from datasets import Dataset, load_dataset
+from datasets import Dataset, load_dataset, load_from_disk
 from model import TransformerConfig, Transformer
 
 
 def main():
     tok = AutoTokenizer.from_pretrained("bert-base-uncased")
-
-    num_procs = max(1, mp.cpu_count() - 1)
-
     accelerator = Accelerator()
 
-    def encode(ex):
-        out = tok(ex["text"], truncation=True, padding=False, max_length=512)
-        out["num_tokens"] = list(map(lambda ex: len(ex), out["input_ids"]))
-        return out
-
-    # We only use 10% of the validation dataset
-    ds = load_dataset(
-        #"roneneldan/TinyStories",
-        # split={"train": "train[:100%]",
-        #     "validation": "validation[:10%]"}
-        "HuggingFaceFW/fineweb-edu", "sample-10BT",
-        split={"train": "train[:10%]"},
-    ).map(
-        encode, batched=1000, num_proc=num_procs,
-    )
+    dataset_path = "datasets/fineweb-edu-sample-10BT-tokenized/"
+    print("Preprocessed dataset path:", dataset_path)
+    if accelerator.is_main_process and not os.path.exists(dataset_path):
+        print("Please run the preprocessing script before training the model.")
+        exit(-1)
+    ds = load_from_disk(dataset_path)
     collator = DataCollatorForLanguageModeling(tokenizer=tok, mlm=False)
 
     config = TransformerConfig(
@@ -49,17 +36,17 @@ def main():
         num_tokens = sum(ds["train"]["num_tokens"])
         print("#Total training tokens", num_tokens)
         print("#Avg training tokens", num_tokens / len(ds["train"]))
-
     args = TrainingArguments(
-        output_dir="out-custom",
+        #output_dir=folder,
         torch_compile=True,
         per_device_train_batch_size=8,
         per_device_eval_batch_size=8,
         num_train_epochs=1,
         eval_strategy="no",
-        save_strategy="epoch",  #TODO: epoch
-        logging_steps=50,
+        save_strategy="steps",  #or "epoch"
+        save_steps=500,
         eval_steps=2000,
+        logging_steps=50,
         fp16=False,
         report_to="wandb",  # or "none"
     )
@@ -76,6 +63,10 @@ def main():
     trainer.train()
 
 
+    ## Save model files
+    if accelerator.is_main_process:
+        folder = f"outputs/{wandb.run.name}-{wandb.run.id}"
+        print("Output folder:", folder)
     # Add `generation_config.json`
     gen_config = GenerationConfig(
         max_new_tokens=128,
@@ -87,7 +78,6 @@ def main():
         pad_token_id=tok.eos_token_id,
         use_cache=False,  # KV-cache is not supported yet
     )
-    folder = f"outputs/{wandb.run.name}-{wandb.run.id}"
     print("Output folder:", folder)
     if accelerator.is_main_process:
         # Add model code in the saved directory
