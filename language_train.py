@@ -1,3 +1,13 @@
+"""
+Usage:
+```py
+python language_train.py
+```
+
+Running with multiple GPUs:
+```py
+accelerate launch language_train.py
+"""
 import os
 import multiprocessing as mp
 try:
@@ -38,21 +48,28 @@ def main():
         num_hidden_layers=8,
     )
     model = Transformer(config)
+    folder = None
     if accelerator.is_main_process:
         print(config)
         print("#Model parameters:", model.num_parameters())
         num_tokens = sum(ds["train"]["num_tokens"])
         print("#Total training tokens", num_tokens)
         print("#Avg training tokens", num_tokens / len(ds["train"]))
+
+        run = wandb.init(
+            project="transformer-lm",
+        )
+        folder = f"outputs/{run.name}-{run.id}"
+        print("Output folder:", folder)
     args = TrainingArguments(
-        #output_dir=folder,
+        output_dir=folder,
         torch_compile=True,
         per_device_train_batch_size=8,
         per_device_eval_batch_size=8,
         num_train_epochs=1,
         eval_strategy="no",
         save_strategy="steps",  #or "epoch"
-        save_steps=500,
+        save_steps=10000,
         eval_steps=2000,
         logging_steps=50,
         fp16=False,
@@ -70,7 +87,6 @@ def main():
 
     trainer.train()
 
-
     ## Save model files
     
     # Add `generation_config.json`
@@ -85,8 +101,6 @@ def main():
         use_cache=False,  # KV-cache is not supported yet
     )
     if accelerator.is_main_process:
-        folder = f"outputs/{wandb.run.name}-{wandb.run.id}"
-        print("Output folder:", folder)
         # Add model code in the saved directory
         config.register_for_auto_class()
         model.register_for_auto_class("AutoModelForCausalLM")
