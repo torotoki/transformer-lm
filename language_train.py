@@ -7,7 +7,14 @@ except Exception:
     pass
 import wandb
 from accelerate import Accelerator
-from transformers import AutoTokenizer, DataCollatorWithPadding, GenerationConfig, TrainingArguments, Trainer, DataCollatorForLanguageModeling
+from transformers import (
+    AutoTokenizer,
+    DataCollatorWithPadding,
+    GenerationConfig,
+    TrainingArguments,
+    Trainer,
+    DataCollatorForLanguageModeling
+)
 from datasets import Dataset, load_dataset, load_from_disk
 from model import TransformerConfig, Transformer
 
@@ -16,7 +23,8 @@ def main():
     tok = AutoTokenizer.from_pretrained("bert-base-uncased")
     accelerator = Accelerator()
 
-    dataset_path = "datasets/fineweb-edu-sample-10BT-tokenized/"
+    #dataset_path = "datasets/fineweb-edu-sample-10BT-tokenized/"
+    dataset_path = "datasets/tiny-stories-tokenized/"
     print("Preprocessed dataset path:", dataset_path)
     if accelerator.is_main_process and not os.path.exists(dataset_path):
         print("Please run the preprocessing script before training the model.")
@@ -64,9 +72,7 @@ def main():
 
 
     ## Save model files
-    if accelerator.is_main_process:
-        folder = f"outputs/{wandb.run.name}-{wandb.run.id}"
-        print("Output folder:", folder)
+    
     # Add `generation_config.json`
     gen_config = GenerationConfig(
         max_new_tokens=128,
@@ -78,8 +84,9 @@ def main():
         pad_token_id=tok.eos_token_id,
         use_cache=False,  # KV-cache is not supported yet
     )
-    print("Output folder:", folder)
     if accelerator.is_main_process:
+        folder = f"outputs/{wandb.run.name}-{wandb.run.id}"
+        print("Output folder:", folder)
         # Add model code in the saved directory
         config.register_for_auto_class()
         model.register_for_auto_class("AutoModelForCausalLM")
