@@ -16,7 +16,7 @@ try:
 except Exception:
     pass
 import wandb
-from accelerate import Accelerator
+from accelerate import Accelerator, PartialState
 from transformers import (
     AutoTokenizer,
     DataCollatorWithPadding,
@@ -28,17 +28,32 @@ from transformers import (
 from datasets import Dataset, load_dataset, load_from_disk
 from model import TransformerConfig, Transformer
 
+def _compute_num_steps(
+    train_config: TrainingArguments,
+    model_config: TransformerConfig,
+):
+    # Compute total steps based on the limitation of total tokens
+    total_tokens = 1_000_000
+    state = PartialState()
+    tokens_per_step = \
+        train_config.per_device_train_batch_size \
+        * train_config.gradient_accumulation_steps \
+        * model_config.context_size \
+        * state.num_processes
+    num_steps = total_tokens // tokens_per_step
+    return num_steps
 
 def main():
     tok = AutoTokenizer.from_pretrained("bert-base-uncased")
-    accelerator = Accelerator()
+    accelerator = Accelerator(log_with="wandb")
 
     #dataset_path = "datasets/fineweb-edu-sample-10BT-tokenized/"
     dataset_path = "datasets/tiny-stories-tokenized/"
-    print("Preprocessed dataset path:", dataset_path)
-    if accelerator.is_main_process and not os.path.exists(dataset_path):
-        print("Please run the preprocessing script before training the model.")
-        exit(-1)
+    if accelerator.is_main_process:
+        print("Preprocessed dataset path:", dataset_path)
+        if not os.path.exists(dataset_path):
+            print("Please run the preprocessing script before training the model.")
+            exit(-1)
     ds = load_from_disk(dataset_path)
     collator = DataCollatorForLanguageModeling(tokenizer=tok, mlm=False)
 
@@ -48,7 +63,18 @@ def main():
         num_hidden_layers=8,
     )
     model = Transformer(config)
-    folder = None
+    accelerator.init_trackers(
+        project_name="transformer-lm",
+    )
+    run = accelerator.get_tracker("wandb", unwrap=True)
+    if accelerator.is_main_process:
+        output_dir = f"outputs/{run.name}-{run.id}"
+        save_strategy = "steps"
+    else:
+        # Do not save non-main process states
+        output_dir = None
+        save_strategy = "no"
+    
     if accelerator.is_main_process:
         print(config)
         print("#Model parameters:", model.num_parameters())
@@ -56,25 +82,22 @@ def main():
         print("#Total training tokens", num_tokens)
         print("#Avg training tokens", num_tokens / len(ds["train"]))
 
-        run = wandb.init(
-            project="transformer-lm",
-        )
-        folder = f"outputs/{run.name}-{run.id}"
-        print("Output folder:", folder)
+        print("Output folder:", output_dir)
     args = TrainingArguments(
-        output_dir=folder,
+        output_dir=output_dir,
         torch_compile=True,
         per_device_train_batch_size=8,
         per_device_eval_batch_size=8,
         num_train_epochs=1,
         eval_strategy="no",
-        save_strategy="steps",  #or "epoch"
+        save_strategy=save_strategy,
         save_steps=10000,
         eval_steps=2000,
         logging_steps=50,
         fp16=False,
         report_to="wandb",  # or "none"
     )
+    args.max_steps = _compute_num_steps(args, config)
 
     trainer = Trainer(
         model=model,
@@ -104,10 +127,12 @@ def main():
         # Add model code in the saved directory
         config.register_for_auto_class()
         model.register_for_auto_class("AutoModelForCausalLM")
-        model.save_pretrained(folder)
-        config.save_pretrained(folder)
-        tok.save_pretrained(folder)  # tokenizer is also saved
-        gen_config.save_pretrained(folder)
+        model.save_pretrained(output_dir)
+        config.save_pretrained(output_dir)
+        tok.save_pretrained(output_dir)  # tokenizer is also saved
+        gen_config.save_pretrained(output_dir)
+    
+    accelerator.end_training()
 
 if __name__ == '__main__':
     main()
