@@ -1,0 +1,24 @@
+tag:
+  - mctest
+task: mctest
+dataset_path: sagnikrayc/mctest
+dataset_name: mc500
+output_type: multiple_choice
+training_split: train
+validation_split: validation
+test_split: test
+doc_to_text: "Story: {{story}}\nQuestion: {{question}}\nAnswer:"
+doc_to_target: "{{answer_options[answer]}}"
+doc_to_choice: "{{[answer_options['A'], answer_options['B'], answer_options['C'], answer_options['D']]}}"
+should_decontaminate: true
+doc_to_decontamination_query: "Story: {{story}}\nQuestion: {{question}}\nAnswer:"
+metric_list:
+  - metric: acc
+    aggregation: mean
+    higher_is_better: true
+  - metric: acc_norm
+    aggregation: mean
+    higher_is_better: true
+metadata:
+  version: 1.0
+
