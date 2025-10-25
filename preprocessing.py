@@ -19,7 +19,7 @@ def _load_fineweb():
         split={"train": "train[:100%]"},
     )
 
-def _load_tinystories()
+def _load_tinystories():
     return load_dataset(
         "roneneldan/TinyStories",
         split={"train": "train[:100%]",
